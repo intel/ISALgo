@@ -1,4 +1,5 @@
 package isal
+
 //#cgo LDFLAGS: -L/usr/bin -lisal
 //#include <igzip_lib.h>
 //#include <isal_native.h>
@@ -8,16 +9,16 @@ package isal
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"unsafe"
-	"errors"
 )
 
 const (
-	BUF_SIZE = 8*1024
+	BUF_SIZE        = 8 * 1024
 	HAS_GZIP_HEADER = 0
-	DEFAULT_LEVEL = 1
+	DEFAULT_LEVEL   = 1
 )
 
 type zstream [unsafe.Sizeof(C.isal_zstream{})]C.char
@@ -31,26 +32,25 @@ type isalgzheader [unsafe.Sizeof(C.isal_gzip_header{})]C.char
 type Reader struct {
 	in          io.Reader
 	zs          inf_state
-	inEOF       bool    // true if in reaches io.EOF
+	inEOF       bool // true if in reaches io.EOF
 	gzHeader    isalgzheader
-	hasGzHeader bool    // true if gzHeader was successfully set.
+	hasGzHeader bool // true if gzHeader was successfully set.
 	inBuf       []byte
 	err         error
 }
+
 // NewReader creates a gzip/flate reader. There can be at most one options arg.
-func NewReader(in io.Reader) (*Reader) {
+func NewReader(in io.Reader) *Reader {
 
 	z := &Reader{
-		in:         in,
-		inBuf:      make([] byte, BUF_SIZE),
+		in:    in,
+		inBuf: make([]byte, BUF_SIZE),
 	}
 	if ec := C.ig_isal_inflate_init(&z.zs[0]); ec != 0 {
 		return nil
 	}
 	return z
 }
-
-
 
 // Writer is the gzip/flate writer. It implements io.WriterCloser.
 type Writer struct {
@@ -59,7 +59,7 @@ type Writer struct {
 	gzHeader isalgzheader
 	outBuf   []byte
 	level    int
-	err         error
+	err      error
 }
 
 //NewWriter returns a new Writer.
@@ -83,24 +83,22 @@ func NewWriter(w io.Writer) (*Writer, error) {
 // or any integer value between BestSpeed and BestCompression inclusive.
 // The error returned will be nil if the level is valid.
 
-
-
 func NewWriterLevel(w io.Writer, level int) (*Writer, error) {
 
 	z := &Writer{
 		out:    w,
 		outBuf: make([]byte, 512*1024),
-		level: level,
+		level:  level,
 	}
 
-	if (level < 0 || level > 3) {
+	if level < 0 || level > 3 {
 		return z, errors.New("isal.gzip: invalid compression level")
 	}
 
-	ec := C.ig_isal_deflate_init(&z.zs[0],C.int(level))
+	ec := C.ig_isal_deflate_init(&z.zs[0], C.int(level))
 
-	if HAS_GZIP_HEADER ==1 {
-		C.ig_isal_gzip_header_init(&z.gzHeader[0]);
+	if HAS_GZIP_HEADER == 1 {
+		C.ig_isal_gzip_header_init(&z.gzHeader[0])
 	}
 
 	if ec != 0 {
@@ -109,11 +107,8 @@ func NewWriterLevel(w io.Writer, level int) (*Writer, error) {
 	return z, nil
 }
 
-
 // Write implements io.Writer.
 func (z *Writer) Write(in []byte) (int, error) {
-
-
 
 	if len(in) == 0 {
 		return 0, nil
@@ -124,33 +119,29 @@ func (z *Writer) Write(in []byte) (int, error) {
 		length     int
 	)
 
-	if( len(z.outBuf) > len(in)) {
+	if len(z.outBuf) > len(in) {
 
-
-		ret := C.ig_isal_deflate_stateless(&z.zs[0],(*C.uint8_t)(unsafe.Pointer(&in[0])), C.int(len(in)), (*C.uint8_t)(unsafe.Pointer(&z.outBuf[0])), &outLen, &inConsumed, HAS_GZIP_HEADER, &z.gzHeader[0])
+		ret := C.ig_isal_deflate_stateless(&z.zs[0], (*C.uint8_t)(unsafe.Pointer(&in[0])), C.int(len(in)), (*C.uint8_t)(unsafe.Pointer(&z.outBuf[0])), &outLen, &inConsumed, HAS_GZIP_HEADER, &z.gzHeader[0])
 
 		if ret != 0 {
 			return 0, isalReturnCodeToError(ret)
 		}
 
 		nOut := len(z.outBuf) - int(outLen)
-		//	fmt.Printf("\n %d len(z.outBuf) %d outLen %d nOut", len(z.outBuf), outLen, nOut) 
 		if err := z.flush(z.outBuf[:nOut]); err != nil {
 			return 0, err
 		}
 		return nOut, nil
 
 	} else {
-		ec := C.ig_isal_deflate_init(&z.zs[0],C.int(z.level))
+		ec := C.ig_isal_deflate_init(&z.zs[0], C.int(z.level))
 		if ec != 0 {
 			return 0, isalReturnCodeToError(ec)
 		}
 
-		if HAS_GZIP_HEADER ==1 {
-			C.ig_isal_gzip_header_init(&z.gzHeader[0]);
+		if HAS_GZIP_HEADER == 1 {
+			C.ig_isal_gzip_header_init(&z.gzHeader[0])
 		}
-
-
 
 		outLen = C.int(len(z.outBuf))
 
@@ -159,25 +150,20 @@ func (z *Writer) Write(in []byte) (int, error) {
 		end_of_stream := C.int(0)
 		state := C.int(0)
 		for {
-
-
-			//fmt.Printf("%d infilesize\n", int(infile_size))
 			avail_in := C.int(BUF_SIZE)
-			if(infile_size < avail_in) {
-				end_of_stream =  1;
-				avail_in = infile_size;
+			if infile_size < avail_in {
+				end_of_stream = 1
+				avail_in = infile_size
 			}
 
 			for {
 				avail_out := C.int(BUF_SIZE)
 
-				C.ig_isal_deflate(&z.zs[0],(*C.uint8_t)(unsafe.Pointer(&in[0])),(*C.uint8_t)(unsafe.Pointer(&z.outBuf[0])),&avail_out, &end_of_stream, &state, &avail_in, HAS_GZIP_HEADER, &z.gzHeader[0])
-				//	fmt.Printf("%d avail_out", int(avail_out))
+				C.ig_isal_deflate(&z.zs[0], (*C.uint8_t)(unsafe.Pointer(&in[0])), (*C.uint8_t)(unsafe.Pointer(&z.outBuf[0])), &avail_out, &end_of_stream, &state, &avail_in, HAS_GZIP_HEADER, &z.gzHeader[0])
 
 				nOut := BUF_SIZE - avail_out
-				//	 fmt.Printf("%d nOut\n", nOut)
 
-				if nOut !=0 {
+				if nOut != 0 {
 					length = length + int(nOut)
 					if err := z.flush(z.outBuf[:nOut]); err != nil {
 						return 0, err
@@ -185,16 +171,15 @@ func (z *Writer) Write(in []byte) (int, error) {
 
 				}
 
-				if avail_out !=0 {
+				if avail_out != 0 {
 					break
 				}
 			}
 
 			infile_size = infile_size - BUF_SIZE
-			if state !=0 {
+			if state != 0 {
 				break
 			}
-
 
 		}
 
@@ -202,7 +187,6 @@ func (z *Writer) Write(in []byte) (int, error) {
 	}
 
 }
-
 
 // Read implements io.Reader, reading uncompressed bytes from its underlying Reader.
 func (z *Reader) Read(p []byte) (n int) {
@@ -213,19 +197,15 @@ func (z *Reader) Read(p []byte) (n int) {
 
 	outLen := C.int(len(p))
 
-	inbytes,err := z.in.Read(z.inBuf)
+	inbytes, err := z.in.Read(z.inBuf)
 
-	  state := C.int(0)
-        avail_in := C.int(inbytes)
-
-
-//	fmt.Printf("%d inbytes %d len(z.inBuf)\n", inbytes, len(z.inBuf))
+	state := C.int(0)
+	avail_in := C.int(inbytes)
 
 	if inbytes < len(z.inBuf) {
 
-
-		ret := C.ig_isal_inflate_stateless(&z.zs[0],(*C.uint8_t)(unsafe.Pointer(&z.inBuf[0])), C.int(inbytes),
-		(*C.uint8_t)(unsafe.Pointer(&p[0])), &outLen, &state, &avail_in, HAS_GZIP_HEADER,&z.gzHeader[0] )
+		ret := C.ig_isal_inflate_stateless(&z.zs[0], (*C.uint8_t)(unsafe.Pointer(&z.inBuf[0])), C.int(inbytes),
+			(*C.uint8_t)(unsafe.Pointer(&p[0])), &outLen, &state, &avail_in, HAS_GZIP_HEADER, &z.gzHeader[0])
 
 		if ret != 0 {
 			z.err = isalReturnCodeToError(ret)
@@ -233,19 +213,18 @@ func (z *Reader) Read(p []byte) (n int) {
 
 	} else {
 
-		for  {
+		for {
 			avail_in := C.int(inbytes)
-			ret := C.ig_isal_inflate(&z.zs[0],(*C.uint8_t)(unsafe.Pointer(&z.inBuf[0])), C.int(inbytes),
-			(*C.uint8_t)(unsafe.Pointer(&p[0])), &outLen,&state, &avail_in, HAS_GZIP_HEADER,&z.gzHeader[0] )
+			ret := C.ig_isal_inflate(&z.zs[0], (*C.uint8_t)(unsafe.Pointer(&z.inBuf[0])), C.int(inbytes),
+				(*C.uint8_t)(unsafe.Pointer(&p[0])), &outLen, &state, &avail_in, HAS_GZIP_HEADER, &z.gzHeader[0])
 
 			if ret != 0 {
 				z.err = isalReturnCodeToError(ret)
 			}
-			 if( err == io.EOF ){
+			if err == io.EOF {
 
-                                break
-                        }
-
+				break
+			}
 
 			inbytes, err = z.in.Read(z.inBuf)
 
@@ -253,20 +232,14 @@ func (z *Reader) Read(p []byte) (n int) {
 
 	}
 
-//		fmt.Printf("%d befor return \n",len(p) - int(outLen))
 	return (len(p) - int(outLen))
-
 }
-
-
-
 
 // Close implements io.Closer
 func (z *Reader) Close() error {
 
 	return nil
 }
-
 
 // Flush writes the data to the output.
 func (z *Writer) flush(data []byte) error {
@@ -280,16 +253,11 @@ func (z *Writer) flush(data []byte) error {
 	return nil
 }
 
-
 // Close implements io.Closer
 func (z *Writer) Close() error {
 
 	return nil
 }
-
-
-
-
 
 func isalReturnCodeToError(r C.int) error {
 	if r == 0 {
@@ -310,4 +278,3 @@ func isalReturnCodeToError(r C.int) error {
 
 	return fmt.Errorf("isal: unknown error %d", r)
 }
-

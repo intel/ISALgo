@@ -82,24 +82,18 @@ int ig_isal_deflate_stateless(char* stream,uint8_t* in, int in_bytes, uint8_t* o
 		zs->avail_in = in_bytes;
 		zs->next_in = in;
 
-	//zs->gzip_flag = IGZIP_GZIP;
 	zs->next_out = out;
 	zs->avail_out = *out_bytes;
-	//printf("%d %d in[0] %d out[0] %d in[1] %d out[1] %d in[2] %d out[2] %d\n", zs.avail_in, zs.avail_out, zs.next_in[0], zs.next_out[0],
-	//		  zs.next_in[1], zs.next_out[1],zs.next_in[2], zs.next_out[2]);
 
 	if( isheader == 1  ) 
 	{
-		//	  printf("inside header\n");
 		zs->gzip_flag = IGZIP_GZIP;
 		isal_write_gzip_header(zs, gh);
 	}
 	int ret = isal_deflate_stateless(zs);
 
 	 assert(zs->avail_in == 0);
-	//    printf("%d total_out %d total_in\n", zs->total_out, zs->total_in);
 	*out_bytes = zs->avail_out;
-	//             for(int i=0;i<(*out_bytes - zs.avail_out);i++) printf("%d i%x %x\n ",i,zs.next_out[i],out[i]);
 
 	return ret;
 }
@@ -138,11 +132,9 @@ int ig_isal_deflate(char* stream,uint8_t* in,uint8_t* out, int* avail_out, int* 
 	ret = 	isal_deflate(zs);
 
 	
-//	printf("%d total_in %d total_out %d avail_in %d avail_out\n", zs->total_in, zs->total_out, zs->avail_in, zs->avail_out);
 	*avail_out = zs->avail_out;
 	*avail_in = zs->avail_in;
 	if(zs->internal_state.state == ZSTATE_END) *state = 1;
-	//printf("ret %d state %d\n", ret, *state);
 
 	return ret;
 }
