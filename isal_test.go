@@ -2,47 +2,16 @@ package isal
 
 import (
 	"bytes"
-	"compress/flate"
+	"compress/gzip"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"runtime"
 	"testing"
 )
-
-var (
-	textTwain, _ = os.ReadFile("mt.txt")
-	textE, _     = os.ReadFile("e.txt")
-)
-
-var suites = []struct{ name, file string }{
-	// Digits is the digits of the irrational number e. Its decimal representation
-	// does not repeat, but there are only 10 possible digits, so it should be
-	// reasonably compressible.
-	{"Digits", "e.txt"},
-	{"Twain", "mt.txt"},
-	// Newton is Isaac Newtons's educational text on Opticks.
-	{"Newton", "Isaac.Newton-Opticks.txt"},
-}
-
-var levelTests = []struct {
-	name  string
-	level int
-}{
-	{"Level 1", 1},
-	{"Level 2", 2},
-	{"Level 3", 3},
-}
-
-var sizes = []struct {
-	name string
-	n    int
-}{
-	{"1e4", 1e4},
-	{"1e5", 1e5},
-	{"1e6", 1e6},
-}
 
 var strGettysBurgAddress = "" +
 	"  Four score and seven years ago our fathers brought forth on\n" +
@@ -75,29 +44,229 @@ var strGettysBurgAddress = "" +
 	"\n" +
 	"Abraham Lincoln, November 19, 1863, Gettysburg, Pennsylvania\n"
 
-func doBench(b *testing.B, f func(b *testing.B, buf []byte, level, n int)) {
-	for _, suite := range suites {
-		buf, err := os.ReadFile(suite.file)
+var bytesSimpleGzip = []byte{ // Hello World
+	0x1f, 0x8b, 0x08, 0x08, 0xc0, 0x6f, 0xb4, 0x63,
+	0x00, 0x03, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x2e,
+	0x74, 0x78, 0x74, 0x00, 0xf3, 0x48, 0xcd, 0xc9,
+	0xc9, 0x57, 0x08, 0xcf, 0x2f, 0xca, 0x49, 0x51,
+	0xe4, 0x02, 0x00, 0xdd, 0xdd, 0x14, 0x7d, 0x0d,
+	0x00, 0x00, 0x00,
+}
+
+var (
+	textTwain, _ = os.ReadFile("mt.txt")
+	textE, _     = os.ReadFile("e.txt")
+	text         []byte
+)
+
+var suites = []struct{ name, file string }{
+	// Digits is the digits of the irrational number e. Its decimal representation
+	// does not repeat, but there are only 10 possible digits, so it should be
+	// reasonably compressible.
+	{"Digits", "e.txt"},
+	{"Twain", "mt.txt"},
+	// Newton is Isaac Newtons's educational text on Opticks.
+	{"Newton", "Isaac.Newton-Opticks.txt"},
+}
+
+var levelTests = []struct {
+	name  string
+	level int
+}{
+	{"Level 1", 1},
+	{"Level 2", 2},
+	{"Level 3", 3},
+}
+
+var sizes = []struct {
+	name string
+	n    int
+}{
+	{"1e4", 1e4},
+	{"1e5", 1e5},
+	{"1e6", 1e6},
+}
+
+const (
+	inputSize = 10_000_000
+)
+
+func TestCompressCopy(t *testing.T) {
+	b := bytes.Repeat([]byte("A"), inputSize)
+	in := bytes.NewBuffer(b)
+	out := bytes.NewBuffer(make([]byte, inputSize))
+	z, _ := NewWriter(out)
+	n, err := io.Copy(z, in)
+	if err != nil {
+		t.Fatalf("Testfail: %v len(b):%d n:%d", err, len(b), n)
+	}
+}
+
+func TestCompressVerify(t *testing.T) {
+	b := bytes.Repeat([]byte("A"), inputSize)
+	cbuf := new(bytes.Buffer) // output for compression
+	dbuf := new(bytes.Buffer) // output for decompression
+
+	z, err := NewWriter(cbuf)
+	if err != nil {
+		t.Fatal("Testfail:", err)
+	}
+
+	n, err := z.Write(b)
+	if err != nil {
+		t.Fatal("Testfail:", err)
+	}
+
+	if n != len(b) {
+		t.Fatalf("Testfail: short write len(b):%d n:%d\n", len(b), n)
+	}
+
+	z.Close()
+
+	g, err := gzip.NewReader(cbuf)
+	if err != nil {
+		t.Fatal("Testfail:", err)
+	}
+
+	nw, err := io.Copy(dbuf, g)
+	if nw != int64(len(b)) {
+		t.Fatalf("Testfail: length mismatch len(b):%d n:%d\n", len(b), n)
+	}
+
+	if err != nil {
+		t.Fatal("Testfail:", err)
+	}
+
+	if !bytes.Equal(b, dbuf.Bytes()) {
+		t.Fatal("Testfail: mismatch between compress in and compress out", n)
+	}
+
+	g.Close()
+	fmt.Printf("Finished compress verify test\n")
+}
+
+func TestDeflateInflate(t *testing.T) {
+
+	var b bytes.Buffer
+	w, _ := gzip.NewWriterLevel(&b, 5)
+	w.Write(textE)
+	w.Close()
+
+	var b1 bytes.Buffer
+	z, _ := NewWriterLevel(&b1, 2)
+	z.Write(textTwain)
+	z.Close()
+
+	buf1 := make([]byte, 1024*1024)
+	r, _ := NewReader(bytes.NewReader(b.Bytes()))
+	n5, _ := r.Read(buf1)
+
+	fmt.Printf("%d n5\n", n5)
+	r.Close()
+
+	n4, _ := os.ReadFile("e.txt")
+
+	fmt.Printf("%d Digits %d CompressedDigits, %d CompressedTwain %d returnd digit \n", len(n4), b.Len(), b1.Len(), n5)
+	if !(bytes.Equal(n4, buf1[:n5])) {
+		t.Errorf("files not same\n")
+	}
+
+	buf2 := make([]byte, 8*1024*1024)
+	q, _ := NewReader(bytes.NewReader(b1.Bytes()))
+	n2, _ := q.Read(buf2)
+
+	q.Close()
+
+	n3, _ := os.ReadFile("mt.txt")
+
+	fmt.Printf("%d Digits %d CompressedDigits, %d Twain %d CompressedTwain %d returnd digit %d returned twian\n", len(n4), b.Len(), len(n3), b1.Len(), n5, n2)
+	if !(bytes.Equal(n3, buf2[:n2])) {
+		t.Errorf("files not same\n")
+	}
+
+}
+
+func TestRawReadSilesia(t *testing.T) {
+	fileName := "silesia.bin"
+	inBuf := new(bytes.Buffer)
+	//outBuf := new(bytes.Buffer)
+	zoutBuf := new(bytes.Buffer)
+	nseg := 0
+
+	fin, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// copy into a buffer
+	nfr, err := io.Copy(inBuf, fin)
+
+	if err != nil {
+		t.Fatal("could read input buffer:", err)
+	}
+
+	fin.Close()
+
+	outBytesBuf := make([]byte, nfr)
+	outBytesSegBuf := make([]byte, 210*1024*1024)
+	testBytesBuf := make([]byte, nfr)
+	copy(testBytesBuf, inBuf.Bytes())
+
+	gw := gzip.NewWriter(zoutBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// compress input buffer
+	nw, err := io.Copy(gw, inBuf)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gw.Close()
+
+	t.Log("compressed_size", nw, "input:", nfr, "output:", zoutBuf.Len())
+
+	// decompress compressed buffer
+	//zr, err := gzip.NewReader(zoutBuf)
+	zr, err := NewReader(zoutBuf)
+
+	if err != nil {
+		t.Fatal("could read input buffer:", err)
+	}
+
+	var totalRead int
+
+	for {
+		nr, err := zr.Read(outBytesSegBuf)
+		nseg++
+		nc := copy(outBytesBuf[totalRead:], outBytesSegBuf[:nr])
+		totalRead += nc
 		if err != nil {
-			b.Fatal(err)
-		}
-		if len(buf) == 0 {
-			b.Fatalf("test file %q has no data", suite.file)
-		}
-		for _, l := range levelTests {
-			for _, s := range sizes {
-				b.Run(suite.name+"/"+l.name+"/"+s.name, func(b *testing.B) {
-					f(b, buf, l.level, s.n)
-				})
+			if err == io.EOF {
+				break
 			}
+			t.Fatal(err)
 		}
 	}
+	t.Log("original:", nfr, "total read", totalRead, "segments", nseg)
+
+	if int64(totalRead) != nfr {
+		t.Fatalf("output mismatch file size = %d != Read() = %d\n", nfr, totalRead)
+	}
+
+	if !bytes.Equal(outBytesBuf, testBytesBuf) {
+		t.Fatalf("output mismatch file decompressed and original\n")
+	}
+
+	zr.Close()
+	fmt.Printf("finished read file test\n")
 }
 
 func runStringCompressTest(str string, t *testing.T) {
 	b := new(bytes.Buffer)
 
-	z, _ := NewWriter(b)
+	z, _ := NewWriterLevel(b, 1)
 
 	z.Write([]byte(str))
 	err := z.Close()
@@ -105,29 +274,28 @@ func runStringCompressTest(str string, t *testing.T) {
 		t.Fatalf("TestInit: error failed to initialize Writer '%v'", err)
 	}
 
-	/* validate with compress/flate */
-	g := flate.NewReader(b)
+	// validate with compress/flate
+	g, _ := gzip.NewReader(b)
 	if err != nil {
 		t.Fatalf("TestInit: error failed to initialize compress/flate '%v'", err)
 	}
 
 	s := new(bytes.Buffer)
 	n, err := io.Copy(s, g)
-	if err != nil {
-		t.Fatalf("TestInit: error failed to copy buffer to the validator '%v'", err)
-	}
 
 	if s.String() != str {
 		t.Errorf("mismatch\n***expected***\n%q:%d bytes\n\n ***received***\n%q:%d", str, len(str), s, n)
 	}
+
+	fmt.Printf("Finish StringCompress Test\n")
 
 }
 
 func runStringDecompressTest(str string, t *testing.T) {
 	b := new(bytes.Buffer)
 
-	/* validate with compress/gzip */
-	g, _ := flate.NewWriter(b, 1)
+	// validate with compress/gzip
+	g, _ := gzip.NewWriterLevel(b, 1)
 
 	g.Write([]byte(str))
 	err := g.Close()
@@ -135,19 +303,20 @@ func runStringDecompressTest(str string, t *testing.T) {
 		t.Fatalf("TestInit: error failed to initialize compress/flate: '%v'", err)
 	}
 
-	z := NewReader(b)
+	z, _ := NewReader(b)
 	if err != nil {
 		t.Fatalf("TestInit: error failed to initialize Reader '%v'", err)
 	}
 	s := make([]byte, 10*1024)
-	n := z.Read(s)
+	n, _ := z.Read(s)
 
 	if string(s[:n]) != str {
 		t.Errorf("mismatch\n***expected***\n%q:%d bytes\n\n ***received***\n%q:%d", str, len(str), s, n)
 	}
 
-}
+	fmt.Printf("Finish StringDecompress Test\n")
 
+}
 func TestCompressShortString(t *testing.T) {
 	str := string("Hello World\n")
 	runStringCompressTest(str, t)
@@ -168,105 +337,164 @@ func TestDecompressLongString(t *testing.T) {
 	runStringDecompressTest(str, t)
 }
 
-func Inflate(deflated []byte) []byte {
-	var b bytes.Buffer
-	r := flate.NewReader(bytes.NewReader(deflated))
-	b.ReadFrom(r)
-	r.Close()
-	return b.Bytes()
+func TestSilesia(t *testing.T) {
+	runtime.GC()
+	//fileName := "test.bin"
+	//fileName := "Isaac.Newton-Opticks.txt"
+	fileName := "silesia.bin"
+	inBuf := new(bytes.Buffer)
+	outBuf := new(bytes.Buffer)
+	//outBuf := bytes.NewBuffer(make([]byte,0,128*2048*1024))
+	zoutBuf := new(bytes.Buffer)
+
+	fmt.Printf(" Mark Test\n")
+	fin, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// copy into a buffer
+	nfr, err := io.Copy(inBuf, fin)
+
+	if err != nil {
+		t.Fatal("could read input buffer:", err)
+	}
+
+	fin.Close()
+
+	zw, err := gzip.NewWriterLevel(zoutBuf, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// compress input buffer
+	nw, err := io.Copy(zw, inBuf)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	zw.Close()
+
+	t.Log("compressed_size", nw, "input:", nfr, "output:", zoutBuf.Len())
+
+	// decompress compressed buffer
+	gr, _ := NewReader(zoutBuf)
+
+	if err != nil {
+		t.Fatal("could read input buffer:", err)
+	}
+
+	nr, err := io.Copy(outBuf, gr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("original:", nfr, "nr", nr, "output:", outBuf.Len())
+
+	if int64(outBuf.Len()) != nr {
+		t.Fatalf("output mismatch nr = %d != outBuf.Len() = %d\n", nr, outBuf.Len())
+	}
+
+	if int64(outBuf.Len()) != nfr {
+		t.Fatalf("output mismatch file size = %d != outBuf.Len() = %d\n", nfr, outBuf.Len())
+	}
+
+	gr.Close()
+
+	fmt.Printf("Finish Mark test\n")
 }
 
-func TestDeflateInflate(t *testing.T) {
-
-	var b bytes.Buffer
-	w, _ := NewWriterLevel(&b, 2)
-	w.Write(textE)
-	w.Close()
-
-	var b1 bytes.Buffer
-	z, _ := NewWriterLevel(&b1, 2)
-	z.Write(textTwain)
-	z.Close()
-
-	buf := make([]byte, 1024*1024)
-
-	y := NewReader(bytes.NewReader(b1.Bytes()))
-	n2 := y.Read(buf)
-
-	buf1 := make([]byte, 1024*1024)
-	r := NewReader(bytes.NewReader(b.Bytes()))
-	n5 := r.Read(buf1)
-
-	n3, _ := os.ReadFile("mt.txt")
-	n4, _ := os.ReadFile("e.txt")
-
-	fmt.Printf("%d Digits %d CompressedDigits, %d Twain %d CompressedTwain\n", len(n4), b.Len(), len(n3), b1.Len())
-	if !(bytes.Equal(n3, buf[:n2])) {
-		t.Errorf("files not same\n")
-	}
-	if !(bytes.Equal(n4, buf1[:n5])) {
-		t.Errorf("files not same\n")
-	}
-
-	var b3, b4 bytes.Buffer
-	q, _ := NewWriterLevel(&b3, 2)
-	q.Write(textE)
-	q.Close()
-
-	s, _ := flate.NewWriter(&b4, 1)
-	s.Write(textTwain)
-	s.Close()
-
-	buf3 := make([]byte, 1024*1024)
-
-	n2 = NewReader(bytes.NewReader(b4.Bytes())).Read(buf3)
-
-	buf4 := Inflate(b3.Bytes())
-
-	if !(bytes.Equal(n3, buf3[:n2])) {
-		t.Errorf("files not same\n")
-	}
-	if !(bytes.Equal(n4, buf4)) {
-		t.Errorf("files not same\n")
-	}
-
-}
-
-func testDeflate(t *testing.T, r *rand.Rand, src []byte) {
+func testDeflate(t *testing.T, r *rand.Rand, l int, src []byte) {
 	orgSrc := src
 	out := bytes.Buffer{}
-	zout, _ := NewWriterLevel(&out, 2)
+	zout, _ := gzip.NewWriterLevel(&out, l)
 	_, _ = zout.Write(src)
+	zout.Close()
 
 	got := bytes.Buffer{}
-	zin := flate.NewReader(bytes.NewReader(out.Bytes()))
+	zin, _ := NewReader(&out)
 	_, _ = io.Copy(&got, zin)
 	if !bytes.Equal(got.Bytes(), orgSrc) {
 		t.Fatal("fail")
 	}
+	zin.Close()
 }
 
 func TestDeflateRandom(t *testing.T) {
-	for iter := 0; iter < 20; iter++ {
-		i := iter
-		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			t.Parallel()
-			r := rand.New(rand.NewSource(int64(i)))
-			n := r.Intn(16 << 20)
-			data := make([]byte, n)
-			_, _ = r.Read(data)
-			testDeflate(t, r, data)
-		})
+	for iter := 0; iter < 25; iter++ {
+		for l := 1; l < 7; l++ {
+			i := iter
+			t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+				t.Parallel()
+				r := rand.New(rand.NewSource(int64(i)))
+				n := r.Intn(16 << 20)
+				data := make([]byte, n)
+				_, _ = r.Read(data)
+				testDeflate(t, r, l, data)
+			})
+		}
+	}
+}
+
+func testInflate(t *testing.T, r *rand.Rand, l int, src []byte) {
+	orgSrc := src
+	out := bytes.Buffer{}
+	zout, _ := NewWriterLevel(&out, l)
+	_, _ = zout.Write(src)
+	zout.Close()
+
+	got := bytes.Buffer{}
+	zin, _ := gzip.NewReader(&out)
+	_, _ = io.Copy(&got, zin)
+	if !bytes.Equal(got.Bytes(), orgSrc) {
+		t.Fatal("fail")
+	}
+	zin.Close()
+}
+
+func TestInflateRandom(t *testing.T) {
+	for iter := 0; iter < 25; iter++ {
+		for l := 1; l < 3; l++ {
+			i := iter
+			t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+				t.Parallel()
+				r := rand.New(rand.NewSource(int64(i)))
+				n := r.Intn(16 << 20)
+				data := make([]byte, n)
+				_, _ = r.Read(data)
+				testInflate(t, r, l, data)
+			})
+		}
+	}
+}
+
+func doBench(b *testing.B, f func(b *testing.B, buf []byte, level, n int)) {
+	for _, suite := range suites {
+		buf, err := os.ReadFile(suite.file)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(buf) == 0 {
+			b.Fatalf("test file %q has no data", suite.file)
+		}
+		for _, l := range levelTests {
+			for _, s := range sizes {
+				b.Run(suite.name+"/"+l.name+"/"+s.name, func(b *testing.B) {
+					f(b, buf, l.level, s.n)
+				})
+			}
+		}
 	}
 }
 
 func BenchmarkDecodeISAL(b *testing.B) {
+	runtime.GC()
 	doBench(b, func(b *testing.B, buf0 []byte, level, n int) {
 		b.ReportAllocs()
 		b.StopTimer()
 
 		compressed := new(bytes.Buffer)
-		w, err := flate.NewWriter(compressed, level)
+		w, err := NewWriterLevel(compressed, level)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -277,11 +505,13 @@ func BenchmarkDecodeISAL(b *testing.B) {
 
 		buf1 := compressed.Bytes()
 		buf0, compressed, w = nil, nil, nil
-		buf4 := make([]byte, 1024*1024)
+		buf4 := make([]byte, 2*1024*1024)
 		runtime.GC()
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			_ = NewReader(bytes.NewReader(buf1)).Read(buf4)
+			br, _ := NewReader(bytes.NewReader(buf1))
+			//			io.Copy(ioutil.Discard,br)
+			_, _ = br.Read(buf4)
 
 		}
 	})
@@ -293,7 +523,7 @@ func BenchmarkDecodeNative(b *testing.B) {
 		b.StopTimer()
 
 		compressed := new(bytes.Buffer)
-		w, err := flate.NewWriter(compressed, level)
+		w, err := gzip.NewWriterLevel(compressed, level)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -303,10 +533,13 @@ func BenchmarkDecodeNative(b *testing.B) {
 
 		buf1 := compressed.Bytes()
 		buf0, compressed, w = nil, nil, nil
+		//buf4 := make([]byte, 2*1024*1024)
+
 		runtime.GC()
 		b.StartTimer()
 		for i := 0; i < b.N; i++ {
-			io.Copy(io.Discard, flate.NewReader(bytes.NewReader(buf1)))
+			br, _ := gzip.NewReader(bytes.NewReader(buf1))
+			io.Copy(ioutil.Discard, br)
 		}
 	})
 }
@@ -351,7 +584,7 @@ func BenchmarkEncodeNative(b *testing.B) {
 			copy(buf1[i:], buf0)
 		}
 		buf0 = nil
-		w, err := flate.NewWriter(io.Discard, level)
+		w, err := gzip.NewWriterLevel(io.Discard, level)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -363,4 +596,40 @@ func BenchmarkEncodeNative(b *testing.B) {
 			w.Close()
 		}
 	})
+}
+
+func ioCopyStringDecompressTest(str string, t *testing.T) {
+	b := new(bytes.Buffer)
+
+	// validate with compress/gzip
+	g, _ := gzip.NewWriterLevel(b, 1)
+
+	g.Write([]byte(str))
+	err := g.Close()
+	if err != nil {
+		t.Fatalf("TestInit: error failed to initialize compress/flate: '%v'", err)
+	}
+
+	z, _ := NewReader(b)
+	if err != nil {
+		t.Fatalf("TestInit: error failed to initialize Reader '%v'", err)
+	}
+	s := new(bytes.Buffer)
+
+	n, err := io.Copy(s, z)
+	if err != nil {
+		t.Fatalf("Decompression failed: '%v'", err)
+	}
+
+	if s.String() != str {
+		t.Errorf("mismatch\n***expected***\n%q:%d bytes\n\n ***received***\n%q:%d", str, len(str), s, n)
+	}
+
+	fmt.Printf("Finish StringDecompress Test\n")
+
+}
+
+func TestIoCopyDecompressShortString(t *testing.T) {
+	str := string("Hello World\n")
+	ioCopyStringDecompressTest(str, t)
 }
