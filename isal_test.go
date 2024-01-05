@@ -44,19 +44,9 @@ var strGettysBurgAddress = "" +
 	"\n" +
 	"Abraham Lincoln, November 19, 1863, Gettysburg, Pennsylvania\n"
 
-var bytesSimpleGzip = []byte{ // Hello World
-	0x1f, 0x8b, 0x08, 0x08, 0xc0, 0x6f, 0xb4, 0x63,
-	0x00, 0x03, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x2e,
-	0x74, 0x78, 0x74, 0x00, 0xf3, 0x48, 0xcd, 0xc9,
-	0xc9, 0x57, 0x08, 0xcf, 0x2f, 0xca, 0x49, 0x51,
-	0xe4, 0x02, 0x00, 0xdd, 0xdd, 0x14, 0x7d, 0x0d,
-	0x00, 0x00, 0x00,
-}
-
 var (
 	textTwain, _ = os.ReadFile("mt.txt")
 	textE, _     = os.ReadFile("e.txt")
-	text         []byte
 )
 
 var suites = []struct{ name, file string }{
@@ -187,18 +177,18 @@ func TestDeflateInflate(t *testing.T) {
 }
 
 func TestRawReadSilesia(t *testing.T) {
-	fileName := "silesia.bin"
+	fileName := "Isaac.Newton-Opticks.txt"
 	inBuf := new(bytes.Buffer)
-	//outBuf := new(bytes.Buffer)
 	zoutBuf := new(bytes.Buffer)
 	nseg := 0
 
 	fin, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
+	repeatReader := newRepeatReader(fin, 500)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	// copy into a buffer
-	nfr, err := io.Copy(inBuf, fin)
+	nfr, err := io.Copy(inBuf, repeatReader)
 
 	if err != nil {
 		t.Fatal("could read input buffer:", err)
@@ -283,6 +273,10 @@ func runStringCompressTest(str string, t *testing.T) {
 	s := new(bytes.Buffer)
 	n, err := io.Copy(s, g)
 
+	if err != nil {
+		t.Errorf("TestFail: error failed to do io.Copy '%v'", err)
+	}
+
 	if s.String() != str {
 		t.Errorf("mismatch\n***expected***\n%q:%d bytes\n\n ***received***\n%q:%d", str, len(str), s, n)
 	}
@@ -337,11 +331,45 @@ func TestDecompressLongString(t *testing.T) {
 	runStringDecompressTest(str, t)
 }
 
-func TestSilesia(t *testing.T) {
+type RepeatReader struct {
+	reader      io.Reader
+	original    io.Reader
+	repeatCount int
+	current     int
+}
+
+// NewRepeatReader creates a new RepeatReader.
+func newRepeatReader(reader io.Reader, repeatCount int) *RepeatReader {
+	return &RepeatReader{
+		reader:      reader,
+		original:    reader,
+		repeatCount: repeatCount,
+		current:     0,
+	}
+}
+
+// Read implements the io.Reader interface for RepeatReader.
+func (r *RepeatReader) Read(p []byte) (int, error) {
+	if r.current >= r.repeatCount {
+		return 0, io.EOF // End of all repeats
+	}
+
+	n, err := r.reader.Read(p)
+	if err != nil {
+		if err == io.EOF && r.current < r.repeatCount-1 {
+			r.current++
+			r.reader = r.original // Reset the reader to the start for the next repeat
+			return r.Read(p)      // Continue reading on next repeat
+		}
+		return n, err
+	}
+
+	return n, nil
+}
+
+func TestLong(t *testing.T) {
 	runtime.GC()
-	//fileName := "test.bin"
-	//fileName := "Isaac.Newton-Opticks.txt"
-	fileName := "silesia.bin"
+	fileName := "Isaac.Newton-Opticks.txt"
 	inBuf := new(bytes.Buffer)
 	outBuf := new(bytes.Buffer)
 	//outBuf := bytes.NewBuffer(make([]byte,0,128*2048*1024))
@@ -349,11 +377,12 @@ func TestSilesia(t *testing.T) {
 
 	fmt.Printf(" Mark Test\n")
 	fin, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
+	repeatReader := newRepeatReader(fin, 500)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	// copy into a buffer
-	nfr, err := io.Copy(inBuf, fin)
+	nfr, err := io.Copy(inBuf, repeatReader)
 
 	if err != nil {
 		t.Fatal("could read input buffer:", err)
@@ -420,17 +449,18 @@ func testDeflate(t *testing.T, r *rand.Rand, l int, src []byte) {
 	zin.Close()
 }
 
+
 func TestDeflateRandom(t *testing.T) {
 	for iter := 0; iter < 25; iter++ {
 		for l := 1; l < 7; l++ {
-			i := iter
-			t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			i, level := iter, l // Create a local copy of iter and l
+			t.Run(fmt.Sprintf("%d/%d", i, level), func(t *testing.T) {
 				t.Parallel()
 				r := rand.New(rand.NewSource(int64(i)))
 				n := r.Intn(16 << 20)
 				data := make([]byte, n)
 				_, _ = r.Read(data)
-				testDeflate(t, r, l, data)
+				testDeflate(t, r, level, data) // Use the local copy
 			})
 		}
 	}
@@ -455,14 +485,14 @@ func testInflate(t *testing.T, r *rand.Rand, l int, src []byte) {
 func TestInflateRandom(t *testing.T) {
 	for iter := 0; iter < 25; iter++ {
 		for l := 1; l < 3; l++ {
-			i := iter
+			i, level := iter, l
 			t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
 				t.Parallel()
 				r := rand.New(rand.NewSource(int64(i)))
 				n := r.Intn(16 << 20)
 				data := make([]byte, n)
 				_, _ = r.Read(data)
-				testInflate(t, r, l, data)
+				testInflate(t, r, level, data)
 			})
 		}
 	}

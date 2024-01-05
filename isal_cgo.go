@@ -18,7 +18,7 @@ import (
 )
 
 var errReaderClosed = errors.New("Reader is closed")
-var errCouldNotLoadLib = errors.New("Couls not load isal library")
+var errCouldNotLoadLib = errors.New("could not load isal library")
 
 const (
 	D_BUF_SIZE      = 640 * 1024
@@ -92,12 +92,12 @@ type Reader struct {
 func NewReader(in io.Reader) (*Reader, error) {
 
 	var err error
-	var ret bool
+	var ready bool
 
 	// load the isal library if not loaded by Ready()
 	if LIB_LOADED == 0 {
-		ret = Ready()
-		if ret == false {
+		ready = Ready()
+		if !ready {
 			return nil, errCouldNotLoadLib
 		}
 	}
@@ -137,18 +137,8 @@ type Writer struct {
 // the first call to Write, Flush, or Close.
 
 func NewWriter(w io.Writer) (*Writer, error) {
-
-	var ret bool
-	// load the isal library if not loaded by Ready()
-
-	if LIB_LOADED == 0 {
-		ret = Ready()
-		if ret == false {
-			return nil, errCouldNotLoadLib
-		}
-	}
-	z, _ := NewWriterLevel(w, DEFAULT_LEVEL)
-	return z, nil
+	z, err := NewWriterLevel(w, DEFAULT_LEVEL)
+	return z, err
 }
 
 // NewWriterLevel is like NewWriter but specifies the compression level instead
@@ -159,6 +149,13 @@ func NewWriter(w io.Writer) (*Writer, error) {
 // The error returned will be nil if the level is valid.
 
 func NewWriterLevel(w io.Writer, level int) (*Writer, error) {
+	var ready bool
+	if LIB_LOADED == 0 {
+		ready = Ready()
+		if !ready {
+			return nil, errCouldNotLoadLib
+		}
+	}
 
 	z := &Writer{
 		out:    w,
@@ -333,7 +330,7 @@ func (z *Reader) Read(p []byte) (n int, err error) {
 				(*C.uint8_t)(unsafe.Pointer(&z.decompressionBuffer[0])), &avail_out, &totalOut, &state, &avail_in, HAS_GZIP_HEADER, &z.gzHeader[0])
 		}
 		if ret != 0 {
-			err = isalReturnCodeToError(ret)
+			z.err = isalReturnCodeToError(ret)
 			return 0, z.err
 		}
 
