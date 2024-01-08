@@ -20,6 +20,9 @@ on:
   schedule:
     - cron: '16 5 * * 6'
 
+# Top-level default, no permissions
+permissions: {}
+
 jobs:
   analyze:
     name: Analyze
