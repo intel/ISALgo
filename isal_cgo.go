@@ -183,7 +183,9 @@ func NewWriterLevel(w io.Writer, level int) (*Writer, error) {
 //If NewWriter/NewReader or NewWriterLevel is called before Ready, initialize the dynamic loads using Ready()
 
 func Ready() bool {
-
+	if LIB_LOADED == 1 {
+		return true
+	}
 	// load the isal library and the symbols
 	ret := C.isal_dload_functions()
 	if ret != 0 {
